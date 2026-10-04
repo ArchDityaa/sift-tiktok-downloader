@@ -11,15 +11,10 @@ interface TikwmResponse {
   data?: Record<string, unknown>;
 }
 
-/**
- * Primary extractor. Uses the public tikwm.com gateway which returns a
- * no-watermark play URL plus cover, audio and stats for most public posts.
- * No API key required.
- */
-export async function extractWithTikwm(
+async function callGateway(
   url: string,
   signal: AbortSignal,
-): Promise<TikTokResult> {
+): Promise<TikwmResponse> {
   const endpoint = new URL("/api/", TIKWM_BASE);
   endpoint.searchParams.set("url", url);
   endpoint.searchParams.set("hd", "1");
@@ -33,9 +28,37 @@ export async function extractWithTikwm(
     },
   });
 
-  if (!res.ok) throw new Error(`gateway responded ${res.status}`);
+  if (!res.ok) {
+    const error = new Error(`gateway responded ${res.status}`) as Error & {
+      retryable?: boolean;
+    };
+    error.retryable = res.status >= 500;
+    throw error;
+  }
 
-  const payload = (await res.json()) as TikwmResponse;
+  return (await res.json()) as TikwmResponse;
+}
+
+/**
+ * Primary extractor. Uses the public tikwm.com gateway which returns a
+ * no-watermark play URL plus cover, audio and stats for most public posts.
+ * No API key required. Retries once on transient server errors.
+ */
+export async function extractWithTikwm(
+  url: string,
+  signal: AbortSignal,
+): Promise<TikTokResult> {
+  let payload: TikwmResponse;
+  try {
+    payload = await callGateway(url, signal);
+  } catch (error) {
+    const retryable = (error as { retryable?: boolean }).retryable === true;
+    if (!retryable || signal.aborted) throw error;
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    if (signal.aborted) throw new Error("aborted");
+    payload = await callGateway(url, signal);
+  }
+
   if (payload.code !== 0 || !payload.data) {
     throw new Error(payload.msg || "gateway returned no data");
   }
@@ -49,12 +72,8 @@ function asUrl(value: unknown): string | undefined {
   return `${TIKWM_BASE}${value.startsWith("/") ? "" : "/"}${value}`;
 }
 
-function normalize(
-  data: Record<string, unknown>,
-  url: string,
-): TikTokResult {
-  const id =
-    (typeof data.id === "string" && data.id) || extractVideoId(url) || "";
+function normalize(data: Record<string, unknown>, url: string): TikTokResult {
+  const id = (typeof data.id === "string" && data.id) || extractVideoId(url) || "";
 
   const images = Array.isArray(data.images)
     ? data.images.filter((i): i is string => typeof i === "string")
@@ -109,13 +128,18 @@ function normalize(
 
   const music = asUrl(data.music);
   if (music) {
-    media.push({ kind: "audio", label: "MP3 - Original sound", url: music, ext: "mp3" });
+    media.push({
+      kind: "audio",
+      label: "MP3 - Original sound",
+      url: music,
+      ext: "mp3",
+    });
   }
 
   const author = (data.author ?? {}) as Record<string, unknown>;
   const musicInfo = (data.music_info ?? {}) as Record<string, unknown>;
 
-  const result: TikTokResult = {
+  return {
     id,
     source: "gateway",
     url,
@@ -123,10 +147,8 @@ function normalize(
       (typeof data.title === "string" && data.title) ||
       (typeof musicInfo.title === "string" ? musicInfo.title : undefined),
     author: {
-      handle:
-        (typeof author.unique_id === "string" && author.unique_id) || "tiktok",
-      nickname:
-        (typeof author.nickname === "string" && author.nickname) || "TikTok",
+      handle: (typeof author.unique_id === "string" && author.unique_id) || "tiktok",
+      nickname: (typeof author.nickname === "string" && author.nickname) || "TikTok",
       avatar: asUrl(author.avatar),
     },
     cover: asUrl(data.origin_cover) ?? asUrl(data.cover),
@@ -145,8 +167,6 @@ function normalize(
         ? "Only the cover image could be recovered for this post."
         : undefined,
   };
-
-  return result;
 }
 
 function num(value: unknown): number | undefined {

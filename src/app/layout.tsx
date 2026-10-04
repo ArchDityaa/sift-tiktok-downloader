@@ -3,6 +3,8 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { SiteHeader } from "@/components/site-header";
 import { SiteFooter } from "@/components/site-footer";
+import { siteConfig } from "@/lib/site";
+import { JsonLd } from "@/components/json-ld";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -14,16 +16,13 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-const SITE_URL = "https://sift-tiktok.vercel.app";
-
 export const metadata: Metadata = {
-  metadataBase: new URL(SITE_URL),
+  metadataBase: new URL(siteConfig.url),
   title: {
-    default: "Sift - Save TikTok videos, sounds, and covers",
-    template: "%s - Sift",
+    default: `${siteConfig.name} - Save TikTok videos, sounds, and covers`,
+    template: `%s - ${siteConfig.name}`,
   },
-  description:
-    "Paste a TikTok link and save the clean video without a watermark, the original sound as MP3, and the cover image. No account, no fee, no tracking.",
+  description: siteConfig.description,
   keywords: [
     "tiktok downloader",
     "save tiktok video",
@@ -31,21 +30,19 @@ export const metadata: Metadata = {
     "tiktok mp3",
     "tiktok cover downloader",
   ],
-  applicationName: "Sift",
+  applicationName: siteConfig.name,
   manifest: "/manifest.webmanifest",
   openGraph: {
     type: "website",
-    url: SITE_URL,
-    siteName: "Sift",
-    title: "Sift - Save TikTok videos, sounds, and covers",
-    description:
-      "Clean video, original sound, and cover image from any public TikTok. No account, no fee, no tracking.",
+    url: siteConfig.url,
+    siteName: siteConfig.name,
+    title: `${siteConfig.name} - Save TikTok videos, sounds, and covers`,
+    description: siteConfig.description,
   },
   twitter: {
     card: "summary_large_image",
-    title: "Sift - Save TikTok videos, sounds, and covers",
-    description:
-      "Clean video, original sound, and cover image from any public TikTok. No account, no fee, no tracking.",
+    title: `${siteConfig.name} - Save TikTok videos, sounds, and covers`,
+    description: siteConfig.description,
   },
   robots: { index: true, follow: true },
   alternates: { canonical: "/" },
@@ -89,6 +86,7 @@ export default function RootLayout({
         <SiteHeader />
         <main className="flex-1">{children}</main>
         <SiteFooter />
+        <JsonLd />
       </body>
     </html>
   );

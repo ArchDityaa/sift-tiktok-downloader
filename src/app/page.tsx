@@ -14,6 +14,7 @@ import {
 import { DownloaderTool } from "@/components/downloader-tool";
 import { Reveal } from "@/components/reveal";
 import { FEATURED_VIDEO } from "@/lib/demo";
+import { FAQ } from "@/lib/faq";
 
 const STEPS = [
   {
@@ -66,28 +67,7 @@ const BENTO = [
   },
 ];
 
-const FAQ = [
-  {
-    q: "Do I need an account or pay anything?",
-    a: "No. Sift has no sign-up, no paywall, and no key you have to plug in. Paste a link and save the file.",
-  },
-  {
-    q: "Why is the video sometimes only at standard quality?",
-    a: "TikTok does not always publish a separate HD file. When it is available we show it first. Otherwise you get the best file the post offers.",
-  },
-  {
-    q: "Can I download photo posts and slideshows?",
-    a: "Yes. Photo posts come back as one save button per image, so you can keep the whole set or just the frame you want.",
-  },
-  {
-    q: "Is it legal to save a TikTok?",
-    a: "Sift is meant for personal use, like saving your own posts. Re-uploading someone else's work without permission can break copyright. Check the rules that apply to you.",
-  },
-  {
-    q: "The link did not work. What now?",
-    a: "Make sure the post is public and the link points at a single post rather than a profile. If it still fails, try again in a moment; the source can be busy.",
-  },
-];
+const FAQ_ITEMS = FAQ;
 
 export default function HomePage() {
   return (
@@ -252,7 +232,7 @@ export default function HomePage() {
           </Reveal>
 
           <div className="mt-10 divide-y divide-line border-y border-line">
-            {FAQ.map((item, index) => (
+            {FAQ_ITEMS.map((item, index) => (
               <Reveal key={item.q} delay={index * 0.03}>
                 <details className="group py-5">
                   <summary className="flex cursor-pointer list-none items-center justify-between gap-4 text-left">
@@ -306,6 +286,7 @@ function AutoPlayCard() {
           <video
             className="aspect-[9/13] w-full object-cover"
             src={FEATURED_VIDEO}
+            poster="/hero-poster.svg"
             autoPlay
             muted
             loop

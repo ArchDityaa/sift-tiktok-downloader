@@ -29,6 +29,34 @@ Open http://localhost:3000.
   used as an open proxy.
 
 Every source is free and keyless. If one breaks, the next takes over.
+Successful lookups are memoised for five minutes, and the gateway provider
+retries once on a transient server error.
+
+## Hardening
+
+- **Timeouts:** both route handlers declare `maxDuration` (`/api/resolve` 15s,
+  `/api/proxy` 60s). The resolver also enforces per-source and total budgets.
+- **Rate limiting:** in-memory, per-IP limits (30 lookups/min, 60 downloads/min).
+  Serverless instances are ephemeral, so this deters casual abuse rather than
+  enforcing a hard quota.
+- **Cross-site guard:** requests with `Sec-Fetch-Site: cross-site` are rejected.
+- **Proxy safety:** restricted to known TikTok/CDN hosts, forwards `Range` for
+  resumable downloads and playback, and reconciles the filename with the served
+  content type so a `.jpg` that is really webp is saved as `.webp`.
+- **Headers/CSP:** security headers on every route, plus a pragmatic
+  Content-Security-Policy in production.
+- **Error handling:** app-level and root error boundaries, plus a not-found page.
+
+## Scripts
+
+```bash
+npm run dev        # local development
+npm run build      # production build
+npm run lint       # eslint
+npm run typecheck  # tsc --noEmit
+npm test           # vitest (unit tests for url parsing, media types, rate limit)
+npm run icons      # regenerate PNG icons from the SVG marks
+```
 
 ## Deploy to Vercel
 
@@ -38,16 +66,20 @@ Every source is free and keyless. If one breaks, the next takes over.
    required.
 4. Deploy.
 
-Optionally update the `SITE_URL` constant in `src/app/layout.tsx`,
-`src/app/robots.ts`, and `src/app/sitemap.ts` to your final domain so canonical
-URLs and the sitemap point at the right place.
+Optional: set `NEXT_PUBLIC_SITE_URL` to your final domain (see `.env.example`)
+so canonical URLs, Open Graph tags, `robots.txt`, and the sitemap point at the
+right place. Without it the app falls back to a sensible default.
 
 ## Notes and limits
 
 - Only public posts can be read. Private, region-locked, or removed posts fail.
-- Vercel's serverless functions cap at 10 seconds on the free plan. The
-  resolver enforces per-source and total time budgets to stay inside that.
+- Vercel's serverless functions cap at 10 seconds on the free plan; enable
+  Fluid compute or raise the limit to use the full 60s proxy budget.
+- The proxy streams bytes through Vercel. On the Hobby plan (100 GB/month fast
+  data transfer) heavy use will burn transfer; the "Open" link downloads
+  straight from the TikTok CDN with zero Vercel bandwidth.
 - Media is streamed from the TikTok CDN; nothing is stored on the server.
+
 
 ## Legal
 

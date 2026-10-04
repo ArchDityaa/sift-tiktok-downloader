@@ -153,13 +153,17 @@ function normalize(
       hasWatermark: false,
     });
   }
+  // `playAddr` is the clean (watermark-free) playback source; `downloadAddr`
+  // is TikTok's own downloadable rendition. Neither reliably carries a
+  // watermark, so neither is labelled as watermarked.
   if (playAddr && playAddr !== downloadAddr) {
     media.push({
       kind: "video",
-      label: "MP4 - Stream copy",
+      label: "MP4 - Playback copy",
       url: playAddr,
       ext: "mp4",
-      hasWatermark: true,
+      quality: "hd",
+      hasWatermark: false,
     });
   }
 

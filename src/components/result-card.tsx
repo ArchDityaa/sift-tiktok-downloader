@@ -167,14 +167,13 @@ export function ResultCard({
 
           <div className="mt-auto space-y-2.5">
             {result.media.map((media, index) => (
-              <a
+              <div
                 key={`${media.url}-${index}`}
-                href={proxyHref(media, result)}
                 className={cn(
-                  "group flex items-center justify-between gap-3 rounded-xl border border-line px-4 py-3 transition-colors",
+                  "flex items-center justify-between gap-3 rounded-xl border border-line px-4 py-3",
                   media.kind === "video"
-                    ? "bg-accent text-accent-ink hover:brightness-105"
-                    : "bg-canvas text-ink hover:border-accent/60",
+                    ? "bg-accent text-accent-ink"
+                    : "bg-canvas text-ink",
                 )}
               >
                 <span className="flex items-center gap-3">
@@ -190,22 +189,39 @@ export function ResultCard({
                   </span>
                   <span className="text-sm font-medium">{media.label}</span>
                 </span>
-                <span className="flex items-center gap-2">
-                  <span
+                <span className="flex items-center gap-1.5">
+                  <a
+                    href={media.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
                     className={cn(
-                      "font-mono text-[10px] uppercase tracking-wider",
-                      media.kind === "video" ? "text-accent-ink/70" : "text-ink-faint",
+                      "rounded-full px-2.5 py-1.5 text-xs font-medium transition-colors",
+                      media.kind === "video"
+                        ? "text-accent-ink/80 hover:bg-black/10 hover:text-accent-ink"
+                        : "text-ink-muted hover:text-ink",
+                    )}
+                  >
+                    Open
+                  </a>
+                  <a
+                    href={proxyHref(media, result)}
+                    aria-label={`Save ${media.label}`}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold transition-transform active:translate-y-px",
+                      media.kind === "video"
+                        ? "bg-black/15 text-accent-ink hover:bg-black/25"
+                        : "bg-accent text-accent-ink hover:brightness-105",
                     )}
                   >
                     {media.ext}
-                  </span>
-                  <DownloadSimple
-                    size={17}
-                    weight="bold"
-                    className="transition-transform group-hover:translate-y-0.5"
-                  />
+                    <DownloadSimple
+                      size={14}
+                      weight="bold"
+                      className="transition-transform group-hover:translate-y-0.5"
+                    />
+                  </a>
                 </span>
-              </a>
+              </div>
             ))}
           </div>
 
