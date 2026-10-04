@@ -30,7 +30,7 @@ const STEPS = [
   {
     icon: <DownloadSimple size={20} weight="bold" />,
     title: "Save what you need",
-    body: "Pick the clean video, the original sound, or the cover. Files save straight to your device.",
+    body: "Pick the clean video, the original sound, or the cover. Save one file, or grab every image from a photo post in a single ZIP.",
   },
 ];
 
@@ -82,9 +82,9 @@ export default function HomePage() {
             </Reveal>
             <Reveal delay={0.06}>
               <p className="mt-5 max-w-[52ch] text-[15px] leading-relaxed text-ink-muted sm:text-base">
-                Paste a link and pull the file you actually want. Video without
-                the watermark, the original sound, and the cover. No account,
-                no fee, no clutter.
+                Paste one link or a whole list. Pull the clean video, the
+                original sound, and the cover. Bundle a photo post into a single
+                ZIP. No account, no fee.
               </p>
             </Reveal>
 

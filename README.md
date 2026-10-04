@@ -1,11 +1,12 @@
 # Sift - TikTok downloader
 
 A small, no-nonsense web app for saving public TikTok media: the clean video
-without a watermark, the original sound as MP3, and the cover image. No
-account, no API key, no fee.
+without a watermark, the original sound as MP3, and the cover image. Paste a
+single link or a whole batch, and bundle photo posts into one ZIP. No account,
+no API key, no fee.
 
-Built with Next.js (App Router), TypeScript, Tailwind CSS v4, Motion, and
-Phosphor icons. Deploys to Vercel's free tier as-is.
+Built with Next.js (App Router), TypeScript, Tailwind CSS v4, Motion, fflate,
+and Phosphor icons. Deploys to Vercel's free tier as-is.
 
 ## Getting started
 
@@ -31,6 +32,19 @@ Open http://localhost:3000.
 Every source is free and keyless. If one breaks, the next takes over.
 Successful lookups are memoised for five minutes, and the gateway provider
 retries once on a transient server error.
+
+## Batch and ZIP
+
+- **Batch download:** the input accepts one or many links (newline, space, or
+  comma separated). Links are validated and de-duplicated client-side, then
+  queued with a concurrency of three and a cap of twenty per batch. Each row
+  resolves independently and can be retried on its own.
+- **Download all videos:** when several ready items hold a video, one button
+  fires their downloads in sequence (spaced out so browsers do not drop them).
+- **ZIP for photo posts:** when a post has more than one image, the images are
+  fetched and zipped **in the browser** with fflate. Direct CDN requests are
+  tried first so the bytes never touch our server; the proxy is used only when
+  CORS blocks the direct request.
 
 ## Hardening
 

@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { parseTikTokUrl, isTikTokUrl, extractVideoId } from "@/lib/tiktok/url";
+import {
+  parseTikTokUrl,
+  isTikTokUrl,
+  extractVideoId,
+  parseManyUrls,
+  canonicalKey,
+} from "@/lib/tiktok/url";
 
 describe("parseTikTokUrl", () => {
   it("accepts a standard video URL", () => {
@@ -58,5 +64,47 @@ describe("extractVideoId", () => {
 
   it("returns null when there is no id", () => {
     expect(extractVideoId("https://www.tiktok.com/@user")).toBeNull();
+  });
+});
+
+describe("canonicalKey", () => {
+  it("ignores www and trailing slashes", () => {
+    expect(canonicalKey("https://www.tiktok.com/@a/video/1/")).toBe(
+      canonicalKey("https://tiktok.com/@a/video/1"),
+    );
+  });
+
+  it("returns null for non-TikTok input", () => {
+    expect(canonicalKey("https://youtube.com/x")).toBeNull();
+  });
+});
+
+describe("parseManyUrls", () => {
+  it("parses links separated by newlines, spaces, and commas", () => {
+    const { valid, invalid } = parseManyUrls(
+      "https://www.tiktok.com/@a/video/111\nhttps://vm.tiktok.com/bbb, https://www.tiktok.com/@c/video/333",
+    );
+    expect(valid).toHaveLength(3);
+    expect(invalid).toHaveLength(0);
+  });
+
+  it("de-duplicates links that point at the same post", () => {
+    const { valid } = parseManyUrls(
+      "https://www.tiktok.com/@a/video/111 https://www.tiktok.com/@a/video/111/",
+    );
+    expect(valid).toHaveLength(1);
+  });
+
+  it("reports invalid tokens separately", () => {
+    const { valid, invalid } = parseManyUrls(
+      "https://www.tiktok.com/@a/video/111 not-a-link https://youtube.com/x",
+    );
+    expect(valid).toHaveLength(1);
+    expect(invalid).toContain("not-a-link");
+    expect(invalid).toContain("https://youtube.com/x");
+  });
+
+  it("returns empty lists for blank input", () => {
+    expect(parseManyUrls("   ")).toEqual({ valid: [], invalid: [] });
   });
 });

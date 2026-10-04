@@ -45,6 +45,15 @@ export interface CorrectedFile {
   kind?: MediaType;
 }
 
+/** Best extension for a delivered content type, or null when unknown. */
+export function extensionForContentType(contentType: string): string | null {
+  const ct = (contentType.split(";")[0] ?? "").trim().toLowerCase();
+  if (ct in IMAGE_TYPES) return IMAGE_TYPES[ct]!;
+  if (ct === "audio/mpeg" || ct === "audio/mp3") return "mp3";
+  if (ct.startsWith("video/")) return "mp4";
+  return null;
+}
+
 /** Reconcile a requested filename with the content type actually served. */
 export function reconcileFilename(
   filename: string | null | undefined,

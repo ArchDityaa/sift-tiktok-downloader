@@ -1,49 +1,72 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { Clipboard, LinkIcon, SpinnerGap, WarningCircle, X } from "@/components/icons";
+import {
+  ArrowClockwise,
+  Clipboard,
+  DownloadSimple,
+  LinkIcon,
+  ListChecks,
+  SpinnerGap,
+  Stack,
+  Trash,
+  WarningCircle,
+  X,
+} from "@/components/icons";
 import type { ResolveResponse, TikTokResult } from "@/lib/tiktok/types";
-import { isTikTokUrl } from "@/lib/tiktok/url";
+import { parseManyUrls } from "@/lib/tiktok/url";
 import { addToHistory } from "@/lib/history";
+import { sanitizeFilename } from "@/lib/format";
 import { ResultCard } from "@/components/result-card";
 import { cn } from "@/lib/utils";
+import { downloadSequentially } from "@/lib/zip";
 
-type Status = "idle" | "loading" | "error" | "ready";
+type JobStatus = "waiting" | "loading" | "ready" | "error";
+
+interface Job {
+  id: string;
+  url: string;
+  status: JobStatus;
+  result?: TikTokResult;
+  error?: string;
+}
+
+interface QueueItem {
+  id: string;
+  url: string;
+}
+
+const MAX_BATCH = 20;
+const CONCURRENCY = 3;
 
 const EXAMPLES = [
   "https://www.tiktok.com/@tiktok/video/7106594312292453675",
 ];
 
 export function DownloaderTool() {
-  const [value, setValue] = useState("");
-  const [status, setStatus] = useState<Status>("idle");
-  const [result, setResult] = useState<TikTokResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [text, setText] = useState("");
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [invalidTokens, setInvalidTokens] = useState<string[]>([]);
+  const [busyAll, setBusyAll] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const outputRef = useRef<HTMLDivElement>(null);
+  const idRef = useRef(0);
 
-  const submit = useCallback(
-    async (raw?: string) => {
-      const url = (raw ?? value).trim();
-      if (!url) {
-        setError("Paste a TikTok link to get started.");
-        setStatus("error");
-        inputRef.current?.focus();
-        return;
-      }
-      if (!isTikTokUrl(url)) {
-        setError(
-          "That does not look like a TikTok link. It should start with tiktok.com.",
-        );
-        setStatus("error");
-        return;
-      }
+  // Queue is driven by refs so the runner never needs to read React state.
+  // This keeps concurrency correct (even under StrictMode) and avoids
+  // setState-in-effect.
+  const queueRef = useRef<QueueItem[]>([]);
+  const activeRef = useRef(0);
+  const scheduleRef = useRef<(() => void) | null>(null);
 
-      setStatus("loading");
-      setError(null);
-      setResult(null);
+  const updateJob = useCallback((id: string, patch: Partial<Job>) => {
+    setJobs((prev) => prev.map((job) => (job.id === id ? { ...job, ...patch } : job)));
+  }, []);
 
+  const runResolve = useCallback(
+    async (id: string, url: string) => {
       try {
         const res = await fetch("/api/resolve", {
           method: "POST",
@@ -51,128 +74,241 @@ export function DownloaderTool() {
           body: JSON.stringify({ url }),
         });
         const data = (await res.json()) as ResolveResponse;
-
         if (!res.ok || !data.ok || !data.result) {
-          setError(data.error || "We could not read this post. Try another link.");
-          setStatus("error");
-          return;
+          updateJob(id, {
+            status: "error",
+            error: data.error || "Could not read this post.",
+          });
+        } else {
+          updateJob(id, { status: "ready", result: data.result });
+          addToHistory(data.result);
         }
-
-        setResult(data.result);
-        setStatus("ready");
-        addToHistory(data.result);
-        requestAnimationFrame(() =>
-          outputRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }),
-        );
       } catch {
-        setError("Network error. Check your connection and try again.");
-        setStatus("error");
+        updateJob(id, {
+          status: "error",
+          error: "Network error. Check your connection and retry.",
+        });
+      } finally {
+        activeRef.current = Math.max(0, activeRef.current - 1);
+        scheduleRef.current?.();
       }
     },
-    [value],
+    [updateJob],
   );
+
+  const pump = useCallback(() => {
+    while (activeRef.current < CONCURRENCY && queueRef.current.length > 0) {
+      const item = queueRef.current.shift()!;
+      activeRef.current += 1;
+      updateJob(item.id, { status: "loading" });
+      void runResolve(item.id, item.url);
+    }
+  }, [runResolve, updateJob]);
+
+  // Keep the latest pump reachable from the runner's completion callback
+  // without reading it during render.
+  useEffect(() => {
+    scheduleRef.current = pump;
+    return () => {
+      scheduleRef.current = null;
+    };
+  }, [pump]);
+
+  const stats = useMemo(() => {
+    let ready = 0;
+    let loading = 0;
+    let waiting = 0;
+    let error = 0;
+    for (const job of jobs) {
+      if (job.status === "ready") ready += 1;
+      else if (job.status === "loading") loading += 1;
+      else if (job.status === "waiting") waiting += 1;
+      else error += 1;
+    }
+    return { ready, loading, waiting, error };
+  }, [jobs]);
+
+  function enqueue(items: QueueItem[]) {
+    if (items.length === 0) return;
+    setJobs((prev) => {
+      const existing = new Set(prev.map((job) => job.url));
+      const additions = items
+        .filter((item) => !existing.has(item.url))
+        .map((item) => ({ ...item, status: "waiting" as JobStatus }));
+      return [...prev, ...additions];
+    });
+    queueRef.current.push(...items);
+    pump();
+  }
+
+  function submit() {
+    setFormError(null);
+    setInvalidTokens([]);
+
+    const { valid, invalid } = parseManyUrls(text);
+    if (invalid.length > 0) setInvalidTokens(invalid.slice(0, 5));
+    if (valid.length === 0) {
+      setFormError("Add at least one valid TikTok link. Links start with tiktok.com.");
+      textareaRef.current?.focus();
+      return;
+    }
+
+    const room = MAX_BATCH - jobs.length;
+    if (room <= 0) {
+      setFormError(`The list is full at ${MAX_BATCH} links. Clear some to add more.`);
+      return;
+    }
+
+    const accepted = valid.slice(0, room);
+    if (valid.length > room) {
+      setFormError(
+        `Only the first ${room} links were added. The list caps at ${MAX_BATCH}.`,
+      );
+    }
+
+    idRef.current += 1;
+    const items: QueueItem[] = accepted.map((url, index) => ({
+      id: `job-${idRef.current}-${index}`,
+      url,
+    }));
+
+    enqueue(items);
+    setText("");
+    requestAnimationFrame(() =>
+      outputRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }),
+    );
+  }
 
   async function paste() {
     try {
-      const text = await navigator.clipboard.readText();
-      if (text) {
-        setValue(text);
-        await submit(text);
-      }
+      const clip = await navigator.clipboard.readText();
+      if (clip) setText((prev) => (prev ? `${prev}\n${clip}` : clip));
     } catch {
-      inputRef.current?.focus();
+      textareaRef.current?.focus();
     }
   }
 
-  function reset() {
-    setValue("");
-    setResult(null);
-    setError(null);
-    setStatus("idle");
-    inputRef.current?.focus();
+  function retryJob(id: string, url: string) {
+    updateJob(id, { status: "waiting", error: undefined });
+    queueRef.current.push({ id, url });
+    pump();
   }
+
+  function removeJob(id: string) {
+    queueRef.current = queueRef.current.filter((item) => item.id !== id);
+    setJobs((prev) => prev.filter((job) => job.id !== id));
+  }
+
+  function clearAll() {
+    queueRef.current = [];
+    setJobs([]);
+    setFormError(null);
+    setInvalidTokens([]);
+    textareaRef.current?.focus();
+  }
+
+  async function downloadAllVideos() {
+    const ready = jobs.filter((job) => job.status === "ready" && job.result);
+    const items = ready.flatMap((job) => {
+      const result = job.result!;
+      const video = result.media.find((item) => item.kind === "video");
+      if (!video) return [];
+      return [
+        {
+          url: video.url,
+          name: `${sanitizeFilename(`${result.author.handle}-${result.id || "tiktok"}`)}.mp4`,
+        },
+      ];
+    });
+    if (items.length === 0) return;
+    setBusyAll(true);
+    try {
+      await downloadSequentially(items);
+    } finally {
+      setBusyAll(false);
+    }
+  }
+
+  const videoCount = jobs.filter(
+    (job) => job.status === "ready" && job.result?.media.some((m) => m.kind === "video"),
+  ).length;
 
   return (
     <div id="tool" className="scroll-mt-24">
-      <form
-        onSubmit={(event) => {
-          event.preventDefault();
-          void submit();
-        }}
-        className="relative"
+      <div
+        className={cn(
+          "rounded-2xl border bg-surface p-2 transition-colors",
+          formError ? "border-red-500/60" : "border-line focus-within:border-accent/70",
+        )}
       >
-        <div
-          className={cn(
-            "flex flex-col gap-2 rounded-2xl border bg-surface p-2 transition-colors sm:flex-row sm:items-center",
-            status === "error" ? "border-red-500/60" : "border-line focus-within:border-accent/70",
-          )}
-        >
-          <span className="hidden pl-2 text-ink-faint sm:block">
+        <div className="flex items-start gap-2">
+          <span className="hidden pl-2 pt-3 text-ink-faint sm:block">
             <LinkIcon size={20} weight="bold" />
           </span>
           <label htmlFor="tiktok-url" className="sr-only">
-            TikTok video URL
+            TikTok links, one per line
           </label>
-          <input
-            ref={inputRef}
+          <textarea
+            ref={textareaRef}
             id="tiktok-url"
-            name="url"
-            type="url"
-            inputMode="url"
+            name="urls"
+            rows={jobs.length > 0 ? 2 : 3}
             autoComplete="off"
             spellCheck={false}
-            placeholder="Paste a TikTok link here"
-            value={value}
+            placeholder="Paste one or more TikTok links, one per line"
+            value={text}
             onChange={(event) => {
-              setValue(event.target.value);
-              if (status === "error") setStatus("idle");
+              setText(event.target.value);
+              if (formError) setFormError(null);
             }}
-            className="min-w-0 flex-1 bg-transparent px-3 py-3 text-[15px] text-ink outline-none placeholder:text-ink-faint"
+            onKeyDown={(event) => {
+              if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                event.preventDefault();
+                submit();
+              }
+            }}
+            className="min-w-0 flex-1 resize-y bg-transparent px-3 py-3 text-[15px] leading-relaxed text-ink outline-none placeholder:text-ink-faint"
           />
+        </div>
 
-          {value ? (
+        <div className="flex flex-wrap items-center gap-2 px-1 pb-1">
+          <button
+            type="button"
+            onClick={paste}
+            className="inline-flex items-center gap-1.5 rounded-full px-3 py-2 text-sm text-ink-muted transition-colors hover:text-ink"
+          >
+            <Clipboard size={16} weight="bold" /> Paste
+          </button>
+          {text ? (
             <button
               type="button"
               onClick={() => {
-                setValue("");
-                setError(null);
-                setStatus("idle");
-                inputRef.current?.focus();
+                setText("");
+                setFormError(null);
+                textareaRef.current?.focus();
               }}
-              aria-label="Clear input"
-              className="hidden h-9 w-9 items-center justify-center rounded-full text-ink-faint transition-colors hover:text-ink sm:inline-flex"
+              className="inline-flex items-center gap-1.5 rounded-full px-3 py-2 text-sm text-ink-muted transition-colors hover:text-ink"
             >
-              <X size={16} weight="bold" />
+              <X size={16} weight="bold" /> Clear
             </button>
-          ) : (
-            <button
-              type="button"
-              onClick={paste}
-              className="hidden items-center gap-1.5 rounded-full px-3 py-2 text-sm text-ink-muted transition-colors hover:text-ink sm:inline-flex"
-            >
-              <Clipboard size={16} weight="bold" /> Paste
-            </button>
-          )}
+          ) : null}
+
+          <span className="ml-auto font-mono text-[11px] uppercase tracking-wider text-ink-faint">
+            {jobs.length} / {MAX_BATCH}
+          </span>
 
           <button
-            type="submit"
-            disabled={status === "loading"}
-            className="inline-flex items-center justify-center gap-2 rounded-xl bg-accent px-5 py-3 text-sm font-semibold text-accent-ink transition-transform hover:brightness-105 active:translate-y-px disabled:opacity-70 sm:min-w-[148px]"
+            type="button"
+            onClick={submit}
+            className="inline-flex items-center justify-center gap-2 rounded-xl bg-accent px-5 py-3 text-sm font-semibold text-accent-ink transition-transform hover:brightness-105 active:translate-y-px"
           >
-            {status === "loading" ? (
-              <>
-                <SpinnerGap size={17} weight="bold" className="animate-spin" />
-                Reading
-              </>
-            ) : (
-              "Get video"
-            )}
+            {jobs.length > 0 ? "Add links" : "Get videos"}
           </button>
         </div>
-      </form>
+      </div>
 
       <AnimatePresence>
-        {status === "error" && error ? (
+        {formError ? (
           <motion.p
             initial={{ opacity: 0, y: -4 }}
             animate={{ opacity: 1, y: 0 }}
@@ -181,17 +317,28 @@ export function DownloaderTool() {
             className="mt-3 flex items-start gap-2 text-sm text-red-500"
           >
             <WarningCircle size={17} weight="fill" className="mt-0.5 shrink-0" />
-            <span>{error}</span>
+            <span>{formError}</span>
           </motion.p>
         ) : null}
       </AnimatePresence>
 
-      {status === "idle" && !error ? (
+      {invalidTokens.length > 0 ? (
+        <p className="mt-3 flex items-start gap-2 text-xs text-ink-faint">
+          <WarningCircle size={15} weight="fill" className="mt-0.5 shrink-0" />
+          <span>
+            Skipped {invalidTokens.length} entry that
+            {invalidTokens.length === 1 ? " is" : " are"} not a TikTok link:{" "}
+            <span className="text-ink-muted">{invalidTokens.join(", ")}</span>
+          </span>
+        </p>
+      ) : null}
+
+      {jobs.length === 0 && !formError ? (
         <p className="mt-3 text-xs text-ink-faint">
           Works with public videos and photo posts. Example:{" "}
           <button
             type="button"
-            onClick={() => setValue(EXAMPLES[0])}
+            onClick={() => setText(EXAMPLES[0])}
             className="text-ink-muted underline decoration-dotted underline-offset-2 transition-colors hover:text-ink"
           >
             a @tiktok post
@@ -200,52 +347,149 @@ export function DownloaderTool() {
       ) : null}
 
       <div ref={outputRef} className="scroll-mt-24">
-        <AnimatePresence mode="wait">
-          {status === "loading" ? <LoadingCard key="loading" /> : null}
-          {status === "ready" && result ? (
-            <div key="result" className="mt-8">
-              <ResultCard result={result} onReset={reset} />
+        {jobs.length > 0 ? (
+          <div className="mt-8">
+            <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-line bg-surface-2/60 px-4 py-3 text-sm">
+              <span className="inline-flex items-center gap-2 font-medium text-ink">
+                <ListChecks size={18} weight="bold" className="text-accent" />
+                {stats.ready} ready
+              </span>
+              {stats.loading > 0 ? (
+                <span className="inline-flex items-center gap-1.5 text-ink-muted">
+                  <SpinnerGap size={15} weight="bold" className="animate-spin" />
+                  {stats.loading} reading
+                </span>
+              ) : null}
+              {stats.waiting > 0 ? (
+                <span className="inline-flex items-center gap-1.5 text-ink-muted">
+                  <Stack size={15} weight="bold" /> {stats.waiting} queued
+                </span>
+              ) : null}
+              {stats.error > 0 ? (
+                <span className="text-red-500">{stats.error} failed</span>
+              ) : null}
+
+              {videoCount > 1 ? (
+                <button
+                  type="button"
+                  onClick={downloadAllVideos}
+                  disabled={busyAll}
+                  className="inline-flex items-center gap-1.5 rounded-full bg-accent px-3.5 py-2 text-xs font-semibold text-accent-ink transition-transform hover:brightness-105 active:translate-y-px disabled:opacity-70"
+                >
+                  {busyAll ? (
+                    <SpinnerGap size={14} weight="bold" className="animate-spin" />
+                  ) : (
+                    <DownloadSimple size={14} weight="bold" />
+                  )}
+                  Download all videos
+                </button>
+              ) : null}
+
+              <button
+                type="button"
+                onClick={clearAll}
+                className="ml-auto inline-flex items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-xs text-ink-muted transition-colors hover:text-ink"
+              >
+                <Trash size={13} weight="bold" /> Clear list
+              </button>
             </div>
-          ) : null}
-        </AnimatePresence>
+
+            <ul className="mt-4 space-y-4">
+              <AnimatePresence initial={false}>
+                {jobs.map((job) => (
+                  <motion.li
+                    key={job.id}
+                    layout
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, height: 0, marginTop: 0 }}
+                  >
+                    {job.status === "ready" && job.result ? (
+                      <ResultCard result={job.result} onRemove={() => removeJob(job.id)} compact />
+                    ) : (
+                      <JobRow
+                        url={job.url}
+                        status={job.status}
+                        error={job.error}
+                        onRetry={() => retryJob(job.id, job.url)}
+                        onRemove={() => removeJob(job.id)}
+                      />
+                    )}
+                  </motion.li>
+                ))}
+              </AnimatePresence>
+            </ul>
+          </div>
+        ) : null}
       </div>
     </div>
   );
 }
 
-function LoadingCard() {
+function JobRow({
+  url,
+  status,
+  error,
+  onRetry,
+  onRemove,
+}: {
+  url: string;
+  status: JobStatus;
+  error?: string;
+  onRetry: () => void;
+  onRemove: () => void;
+}) {
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 12 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0 }}
-      className="mt-8 overflow-hidden rounded-2xl border border-line bg-surface"
-      aria-hidden="true"
+    <div
+      className={cn(
+        "flex items-center gap-3 rounded-2xl border px-4 py-3.5",
+        status === "error" ? "border-red-500/40 bg-surface" : "border-line bg-surface",
+      )}
     >
-      <div className="grid gap-0 md:grid-cols-[300px_1fr]">
-        <div className="aspect-[9/13] w-full bg-surface-2 md:aspect-auto md:h-full">
-          <div className="h-full w-full animate-pulse bg-line/40" />
-        </div>
-        <div className="space-y-5 p-6">
-          <div className="flex items-center gap-3">
-            <div className="h-10 w-10 animate-pulse rounded-full bg-line/50" />
-            <div className="space-y-2">
-              <div className="h-3 w-32 animate-pulse rounded bg-line/50" />
-              <div className="h-3 w-20 animate-pulse rounded bg-line/40" />
-            </div>
-          </div>
-          <div className="h-3 w-full animate-pulse rounded bg-line/40" />
-          <div className="h-3 w-2/3 animate-pulse rounded bg-line/40" />
-          <div className="space-y-2.5 pt-3">
-            {[0, 1, 2].map((row) => (
-              <div
-                key={row}
-                className="h-14 animate-pulse rounded-xl bg-line/40"
-              />
-            ))}
-          </div>
-        </div>
+      <span
+        className={cn(
+          "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg",
+          status === "error" ? "bg-red-500/10 text-red-500" : "bg-accent-weak text-accent",
+        )}
+      >
+        {status === "loading" ? (
+          <SpinnerGap size={17} weight="bold" className="animate-spin" />
+        ) : status === "error" ? (
+          <WarningCircle size={17} weight="fill" />
+        ) : (
+          <Stack size={17} weight="bold" />
+        )}
+      </span>
+
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm text-ink-muted">{url}</p>
+        <p className="text-xs text-ink-faint">
+          {status === "loading"
+            ? "Reading the post"
+            : status === "waiting"
+              ? "Waiting in queue"
+              : error || "Failed"}
+        </p>
       </div>
-    </motion.div>
+
+      {status === "error" ? (
+        <button
+          type="button"
+          onClick={onRetry}
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-xs text-ink-muted transition-colors hover:text-ink"
+        >
+          <ArrowClockwise size={14} weight="bold" /> Retry
+        </button>
+      ) : null}
+
+      <button
+        type="button"
+        onClick={onRemove}
+        aria-label="Remove from list"
+        className="shrink-0 rounded-full p-2 text-ink-faint transition-colors hover:text-ink"
+      >
+        <X size={15} weight="bold" />
+      </button>
+    </div>
   );
 }
